@@ -1,4 +1,3 @@
-
 package com.example.lanshare
 
 import android.app.Notification
@@ -9,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 
 class ProjectionForegroundService : Service() {
 
@@ -62,23 +62,11 @@ class ProjectionForegroundService : Service() {
         startId: Int
     ): Int {
 
-        try {
+        return try {
 
             val notification = buildNotification()
 
-            if (Build.VERSION.SDK_INT >= 34) {
-
-                val serviceTypes =
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    serviceTypes
-                )
-
-            } else if (Build.VERSION.SDK_INT >= 29) {
+            if (Build.VERSION.SDK_INT >= 29) {
 
                 startForeground(
                     NOTIFICATION_ID,
@@ -94,29 +82,40 @@ class ProjectionForegroundService : Service() {
                 )
             }
 
+            START_NOT_STICKY
+
         } catch (e: Exception) {
 
-            stopSelf()
-            throw e
-        }
+            Log.e(
+                TAG,
+                "Could not start foreground service",
+                e
+            )
 
-        return START_NOT_STICKY
+            stopSelf(startId)
+
+            START_NOT_STICKY
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
 
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        if (Build.VERSION.SDK_INT >= 24) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
 
         super.onDestroy()
     }
 
     companion object {
 
-        private const val CHANNEL_ID =
-            "lan_share_projection"
-
+        private const val TAG = "LanShare"
+        private const val CHANNEL_ID = "lan_share_projection"
         private const val NOTIFICATION_ID = 41
     }
 }
