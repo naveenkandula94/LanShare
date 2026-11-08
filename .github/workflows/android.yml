@@ -1,61 +1,77 @@
 
-name: Android CI
+name: Build LAN Share APK
 
 on:
-  push:
-    branches: [main, master, develop]
-  pull_request:
-    branches: [main, master, develop]
   workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build LAN Share APK
+    name: Build Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licences
-        run: yes | sdkmanager --licenses
-
-      - name: Install Android SDK packages
+      - name: Configure Android SDK
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n 1)"
+          fi
+          test -x "$SDKMANAGER"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Accept Android licenses
+        run: yes | "$SDKMANAGER" --licenses || true
 
-      - name: Check project files
+      - name: Install Android packages
+        run: |
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Check project structure
         run: |
           ls -la
           test -f gradlew
           test -f settings.gradle.kts
           test -f app/build.gradle.kts
 
-      - name: Make Gradle executable
-        run: chmod +x gradlew
-
       - name: Build Debug APK
-        run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleDebug --stacktrace
 
       - name: Verify APK
         run: |
-          test -f app/build/outputs/apk/debug/app-debug.apk
-          unzip -t app/build/outputs/apk/debug/app-debug.apk
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          unzip -t "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
