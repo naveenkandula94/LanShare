@@ -11,33 +11,61 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * One peer connection per session. The receiver creates the offer; the sender answers.
- * ICE candidates are embedded in the SDP by waiting for ICE gathering to complete.
+ * WebRTC engine for LAN Share.
+ *
+ * Sender:
+ * - Captures the Android screen.
+ * - Sends screen video and microphone audio.
+ * - Receives the other phone's microphone audio.
+ *
+ * Receiver:
+ * - Sends microphone audio.
+ * - Receives screen video and microphone audio.
  */
 class RtcPeer(
     private val context: Context,
     private val remoteRenderer: SurfaceViewRenderer,
     private val onStatus: (String) -> Unit
 ) {
+
     private val egl = EglBase.create()
+
     private val audioModule =
-        JavaAudioDeviceModule.builder(context).createAudioDeviceModule()
+        JavaAudioDeviceModule.builder(context.applicationContext)
+            .createAudioDeviceModule()
 
     private val factory: PeerConnectionFactory
 
     private var peer: PeerConnection? = null
+
     private var capturer: ScreenCapturerAndroid? = null
+    private var textureHelper: SurfaceTextureHelper? = null
+
     private var videoSource: VideoSource? = null
     private var localVideoTrack: VideoTrack? = null
-    private var localAudioTrack: AudioTrack? = null
+
     private var audioSource: AudioSource? = null
+    private var localAudioTrack: AudioTrack? = null
+
+    private var remoteVideoTrack: VideoTrack? = null
+    private var remoteAudioTrack: AudioTrack? = null
+
+    private var captureWidth = 1280
+    private var captureHeight = 720
+    private var captureFps = 15
+
+    private var initialized = false
+    private var closed = false
 
     private val iceGathered = CountDownLatch(1)
 
+    private val lock = Any()
+
     init {
+
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions
-                .builder(context)
+                .builder(context.applicationContext)
                 .createInitializationOptions()
         )
 
@@ -51,161 +79,376 @@ class RtcPeer(
                 )
             )
             .setVideoDecoderFactory(
-                DefaultVideoDecoderFactory(egl.eglBaseContext)
+                DefaultVideoDecoderFactory(
+                    egl.eglBaseContext
+                )
             )
             .createPeerConnectionFactory()
 
-        remoteRenderer.init(egl.eglBaseContext, null)
+        remoteRenderer.init(
+            egl.eglBaseContext,
+            null
+        )
+
         remoteRenderer.setEnableHardwareScaler(true)
         remoteRenderer.setMirror(false)
+
+        initialized = true
     }
 
+    // ---------------------------------------------------------
+    // SCREEN CAPTURE
+    // ---------------------------------------------------------
+
     fun startScreenCapture(permissionData: Intent) {
+
+        check(!closed) {
+            "WebRTC session has already been closed."
+        }
+
+        check(capturer == null) {
+            "Screen capture is already running."
+        }
+
         val source = factory.createVideoSource(false)
+
         videoSource = source
 
         val helper = SurfaceTextureHelper.create(
-            "ScreenCaptureThread",
+            "LanShareScreenCapture",
             egl.eglBaseContext
-        )
+        ) ?: error("Could not create screen capture thread.")
+
+        textureHelper = helper
 
         val screenCapturer = ScreenCapturerAndroid(
             permissionData,
             object : MediaProjection.Callback() {
+
                 override fun onStop() {
-                    onStatus("Android stopped screen capture.")
+
+                    onStatus(
+                        "Android stopped screen capture."
+                    )
                 }
             }
         )
 
         capturer = screenCapturer
 
-        screenCapturer.initialize(
-            helper,
-            context,
-            source.capturerObserver
-        )
+        try {
 
-        screenCapturer.startCapture(1280, 720, 15)
+            screenCapturer.initialize(
+                helper,
+                context.applicationContext,
+                source.capturerObserver
+            )
 
-        localVideoTrack = factory.createVideoTrack(
-            "screen-video",
-            source
-        )
+            screenCapturer.startCapture(
+                captureWidth,
+                captureHeight,
+                captureFps
+            )
+
+            localVideoTrack = factory.createVideoTrack(
+                "lan-share-screen-video",
+                source
+            )
+
+            localVideoTrack?.setEnabled(true)
+
+            onStatus(
+                "Screen capture started: ${captureWidth}x${captureHeight} at ${captureFps} fps."
+            )
+
+        } catch (e: Exception) {
+
+            try {
+                screenCapturer.stopCapture()
+            } catch (_: Exception) {
+            }
+
+            try {
+                screenCapturer.dispose()
+            } catch (_: Exception) {
+            }
+
+            capturer = null
+
+            try {
+                helper.dispose()
+            } catch (_: Exception) {
+            }
+
+            textureHelper = null
+
+            try {
+                source.dispose()
+            } catch (_: Exception) {
+            }
+
+            videoSource = null
+
+            throw IllegalStateException(
+                "Screen capture initialization failed: ${e.message}",
+                e
+            )
+        }
     }
 
+    // ---------------------------------------------------------
+    // PEER CONNECTION
+    // ---------------------------------------------------------
+
     fun createPeer(asReceiver: Boolean = false): Boolean {
+
+        check(!closed) {
+            "WebRTC session has already been closed."
+        }
+
+        check(peer == null) {
+            "Peer connection already exists."
+        }
+
+        if (!asReceiver) {
+
+            check(localVideoTrack != null) {
+                "Start screen capture before creating the sender peer."
+            }
+        }
+
         val iceServers = listOf(
+
             PeerConnection.IceServer
                 .builder("stun:stun.l.google.com:19302")
                 .createIceServer()
+
         )
 
-        val config = PeerConnection.RTCConfiguration(iceServers)
+        val config = PeerConnection.RTCConfiguration(
+            iceServers
+        )
 
-        peer = factory.createPeerConnection(
+        config.sdpSemantics =
+            PeerConnection.SdpSemantics.UNIFIED_PLAN
+
+        val connection = factory.createPeerConnection(
             config,
             object : PeerConnection.Observer {
 
                 override fun onSignalingChange(
                     state: PeerConnection.SignalingState
-                ) {}
+                ) {
+                    onStatus(
+                        "Signaling state: $state"
+                    )
+                }
 
                 override fun onIceConnectionChange(
                     state: PeerConnection.IceConnectionState
                 ) {
-                    onStatus("WebRTC connection: $state")
+
+                    onStatus(
+                        "WebRTC connection: $state"
+                    )
                 }
 
                 override fun onIceConnectionReceivingChange(
                     receiving: Boolean
-                ) {}
+                ) {
+                }
 
                 override fun onIceGatheringChange(
                     state: PeerConnection.IceGatheringState
                 ) {
-                    if (state == PeerConnection.IceGatheringState.COMPLETE) {
+
+                    if (
+                        state ==
+                        PeerConnection.IceGatheringState.COMPLETE
+                    ) {
                         iceGathered.countDown()
                     }
                 }
 
-                override fun onIceCandidate(candidate: IceCandidate) {}
+                override fun onIceCandidate(
+                    candidate: IceCandidate
+                ) {
+                    // ICE candidates are included in the SDP
+                    // after gathering completes.
+                }
 
                 override fun onIceCandidatesRemoved(
                     candidates: Array<IceCandidate>
-                ) {}
+                ) {
+                }
 
-                override fun onAddStream(stream: MediaStream) {}
+                override fun onAddStream(
+                    stream: MediaStream
+                ) {
+                }
 
-                override fun onRemoveStream(stream: MediaStream) {}
+                override fun onRemoveStream(
+                    stream: MediaStream
+                ) {
+                }
 
-                override fun onDataChannel(channel: DataChannel) {}
+                override fun onDataChannel(
+                    channel: DataChannel
+                ) {
+                }
 
-                override fun onRenegotiationNeeded() {}
+                override fun onRenegotiationNeeded() {
+                }
 
                 override fun onAddTrack(
                     receiver: RtpReceiver,
                     mediaStreams: Array<out MediaStream>
                 ) {
-                    val track = receiver.track()
 
-                    if (track is VideoTrack) {
-                        track.addSink(remoteRenderer)
-                        onStatus("Receiving live screen and voice.")
-                    }
+                    handleRemoteTrack(
+                        receiver.track()
+                    )
                 }
 
-                override fun onTrack(transceiver: RtpTransceiver) {
-                    val track = transceiver.receiver.track()
+                override fun onTrack(
+                    transceiver: RtpTransceiver
+                ) {
 
-                    if (track is VideoTrack) {
-                        track.addSink(remoteRenderer)
-                    }
+                    handleRemoteTrack(
+                        transceiver.receiver.track()
+                    )
                 }
             }
         )
 
-        val connection = peer ?: return false
+        peer = connection
+            ?: return false
 
-        audioSource = factory.createAudioSource(MediaConstraints())
+        try {
 
-        localAudioTrack = factory.createAudioTrack(
-            "voice-audio",
-            audioSource
-        )
+            // Local microphone audio track.
 
-        // Both phones publish microphone audio.
-        connection.addTrack(
-            localAudioTrack,
-            listOf("lan-share-stream")
-        )
+            val constraints = MediaConstraints()
 
-        if (asReceiver) {
-            // Receiver requests incoming video.
-            val videoInit = RtpTransceiver.RtpTransceiverInit(
-                RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
+            val source = factory.createAudioSource(
+                constraints
             )
 
-            connection.addTransceiver(
-                MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-                videoInit
+            audioSource = source
+
+            val audioTrack = factory.createAudioTrack(
+                "lan-share-microphone",
+                source
             )
-        } else {
-            // Sender publishes screen video.
-            localVideoTrack?.let {
+
+            localAudioTrack = audioTrack
+
+            audioTrack.setEnabled(true)
+
+            connection.addTrack(
+                audioTrack,
+                listOf("lan-share-stream")
+            )
+
+            if (asReceiver) {
+
+                // Receiver requests the sender's screen video.
+
+                val videoInit =
+                    RtpTransceiver.RtpTransceiverInit(
+                        RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
+                    )
+
+                connection.addTransceiver(
+                    MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                    videoInit
+                )
+
+            } else {
+
+                // Sender publishes its screen video.
+
+                val screenTrack = localVideoTrack
+                    ?: error("Screen video track is unavailable.")
+
                 connection.addTrack(
-                    it,
+                    screenTrack,
                     listOf("lan-share-stream")
                 )
             }
-        }
 
-        return true
+            return true
+
+        } catch (e: Exception) {
+
+            close()
+
+            throw IllegalStateException(
+                "Could not configure WebRTC tracks: ${e.message}",
+                e
+            )
+        }
     }
 
+    // ---------------------------------------------------------
+    // REMOTE TRACKS
+    // ---------------------------------------------------------
+
+    private fun handleRemoteTrack(
+        track: MediaStreamTrack?
+    ) {
+
+        when (track) {
+
+            is VideoTrack -> {
+
+                synchronized(lock) {
+
+                    if (remoteVideoTrack !== track) {
+
+                        remoteVideoTrack?.removeSink(
+                            remoteRenderer
+                        )
+
+                        remoteVideoTrack = track
+
+                        track.setEnabled(true)
+
+                        track.addSink(
+                            remoteRenderer
+                        )
+                    }
+                }
+
+                onStatus(
+                    "Receiving screen video."
+                )
+            }
+
+            is AudioTrack -> {
+
+                synchronized(lock) {
+
+                    remoteAudioTrack = track
+
+                    track.setEnabled(true)
+                }
+
+                onStatus(
+                    "Receiving remote microphone audio."
+                )
+            }
+        }
+    }
+
+    // ---------------------------------------------------------
+    // CREATE OFFER
+    // ---------------------------------------------------------
+
     fun makeOffer(): String {
+
         val connection = requireNotNull(peer) {
-            "Peer connection not initialized"
+            "Peer connection not initialized."
         }
 
         val result = AtomicReference<String>()
@@ -217,55 +460,100 @@ class RtcPeer(
                 override fun onCreateSuccess(
                     description: SessionDescription
                 ) {
+
                     connection.setLocalDescription(
                         object : SdpObserver {
 
                             override fun onSetSuccess() {
-                                result.set(description.description)
+
+                                result.set(
+                                    description.description
+                                )
+
                                 latch.countDown()
                             }
 
-                            override fun onSetFailure(error: String) {
-                                result.set("ERROR:$error")
+                            override fun onSetFailure(
+                                error: String
+                            ) {
+
+                                result.set(
+                                    "ERROR:$error"
+                                )
+
                                 latch.countDown()
                             }
 
                             override fun onCreateSuccess(
                                 p0: SessionDescription
-                            ) {}
+                            ) {
+                            }
 
-                            override fun onCreateFailure(p0: String) {}
+                            override fun onCreateFailure(
+                                p0: String
+                            ) {
+                            }
                         },
                         description
                     )
                 }
 
-                override fun onSetSuccess() {}
+                override fun onSetSuccess() {
+                }
 
-                override fun onCreateFailure(error: String) {
-                    result.set("ERROR:$error")
+                override fun onCreateFailure(
+                    error: String
+                ) {
+
+                    result.set(
+                        "ERROR:$error"
+                    )
+
                     latch.countDown()
                 }
 
-                override fun onSetFailure(error: String) {
-                    result.set("ERROR:$error")
+                override fun onSetFailure(
+                    error: String
+                ) {
+
+                    result.set(
+                        "ERROR:$error"
+                    )
+
                     latch.countDown()
                 }
             },
             MediaConstraints()
         )
 
-        check(latch.await(20, TimeUnit.SECONDS)) {
-            "Timed out creating offer"
+        check(
+            latch.await(20, TimeUnit.SECONDS)
+        ) {
+            "Timed out creating WebRTC offer."
+        }
+
+        val offer = result.get()
+
+        check(!offer.startsWith("ERROR:")) {
+            offer
         }
 
         awaitIce()
 
-        return result.get()
+        return offer
     }
 
-    fun acceptOfferAndCreateAnswer(offerSdp: String): String {
-        val connection = requireNotNull(peer)
+    // ---------------------------------------------------------
+    // ACCEPT OFFER AND CREATE ANSWER
+    // ---------------------------------------------------------
+
+    fun acceptOfferAndCreateAnswer(
+        offerSdp: String
+    ): String {
+
+        val connection = requireNotNull(peer) {
+            "Peer connection not initialized."
+        }
 
         setRemote(
             connection,
@@ -282,54 +570,97 @@ class RtcPeer(
                 override fun onCreateSuccess(
                     description: SessionDescription
                 ) {
+
                     connection.setLocalDescription(
                         object : SdpObserver {
 
                             override fun onSetSuccess() {
-                                result.set(description.description)
+
+                                result.set(
+                                    description.description
+                                )
+
                                 latch.countDown()
                             }
 
-                            override fun onSetFailure(error: String) {
-                                result.set("ERROR:$error")
+                            override fun onSetFailure(
+                                error: String
+                            ) {
+
+                                result.set(
+                                    "ERROR:$error"
+                                )
+
                                 latch.countDown()
                             }
 
                             override fun onCreateSuccess(
                                 p0: SessionDescription
-                            ) {}
+                            ) {
+                            }
 
-                            override fun onCreateFailure(p0: String) {}
+                            override fun onCreateFailure(
+                                p0: String
+                            ) {
+                            }
                         },
                         description
                     )
                 }
 
-                override fun onSetSuccess() {}
+                override fun onSetSuccess() {
+                }
 
-                override fun onCreateFailure(error: String) {
-                    result.set("ERROR:$error")
+                override fun onCreateFailure(
+                    error: String
+                ) {
+
+                    result.set(
+                        "ERROR:$error"
+                    )
+
                     latch.countDown()
                 }
 
-                override fun onSetFailure(error: String) {
-                    result.set("ERROR:$error")
+                override fun onSetFailure(
+                    error: String
+                ) {
+
+                    result.set(
+                        "ERROR:$error"
+                    )
+
                     latch.countDown()
                 }
             },
             MediaConstraints()
         )
 
-        check(latch.await(20, TimeUnit.SECONDS)) {
-            "Timed out creating answer"
+        check(
+            latch.await(20, TimeUnit.SECONDS)
+        ) {
+            "Timed out creating WebRTC answer."
+        }
+
+        val answer = result.get()
+
+        check(!answer.startsWith("ERROR:")) {
+            answer
         }
 
         awaitIce()
 
-        return result.get()
+        return answer
     }
 
-    fun acceptAnswer(answerSdp: String) {
+    // ---------------------------------------------------------
+    // ACCEPT ANSWER
+    // ---------------------------------------------------------
+
+    fun acceptAnswer(
+        answerSdp: String
+    ) {
+
         setRemote(
             requireNotNull(peer),
             SessionDescription.Type.ANSWER,
@@ -337,12 +668,18 @@ class RtcPeer(
         )
     }
 
+    // ---------------------------------------------------------
+    // REMOTE SDP
+    // ---------------------------------------------------------
+
     private fun setRemote(
         connection: PeerConnection,
         type: SessionDescription.Type,
         sdp: String
     ) {
+
         val latch = CountDownLatch(1)
+
         val failure = AtomicReference<String?>()
 
         connection.setRemoteDescription(
@@ -352,22 +689,32 @@ class RtcPeer(
                     latch.countDown()
                 }
 
-                override fun onSetFailure(error: String) {
+                override fun onSetFailure(
+                    error: String
+                ) {
+
                     failure.set(error)
+
                     latch.countDown()
                 }
 
                 override fun onCreateSuccess(
                     p0: SessionDescription
-                ) {}
+                ) {
+                }
 
-                override fun onCreateFailure(p0: String) {}
+                override fun onCreateFailure(
+                    p0: String
+                ) {
+                }
             },
             SessionDescription(type, sdp)
         )
 
-        check(latch.await(20, TimeUnit.SECONDS)) {
-            "Timed out setting remote SDP"
+        check(
+            latch.await(20, TimeUnit.SECONDS)
+        ) {
+            "Timed out setting remote SDP."
         }
 
         check(failure.get() == null) {
@@ -375,46 +722,171 @@ class RtcPeer(
         }
     }
 
+    // ---------------------------------------------------------
+    // ICE GATHERING
+    // ---------------------------------------------------------
+
     private fun awaitIce() {
-        check(iceGathered.await(25, TimeUnit.SECONDS)) {
-            "ICE gathering timed out"
+
+        check(
+            iceGathered.await(25, TimeUnit.SECONDS)
+        ) {
+            "ICE gathering timed out. Check network connectivity."
         }
     }
 
-    fun setMicrophoneEnabled(enabled: Boolean) {
+    // ---------------------------------------------------------
+    // MICROPHONE CONTROL
+    // ---------------------------------------------------------
+
+    fun setMicrophoneEnabled(
+        enabled: Boolean
+    ) {
+
         localAudioTrack?.setEnabled(enabled)
     }
+
+    // ---------------------------------------------------------
+    // VIDEO QUALITY
+    // ---------------------------------------------------------
 
     fun setVideoQuality(
         width: Int,
         height: Int,
         fps: Int
     ) {
+
+        if (width <= 0 || height <= 0 || fps <= 0) {
+            return
+        }
+
+        captureWidth = width
+        captureHeight = height
+        captureFps = fps
+
         try {
-            capturer?.changeCaptureFormat(width, height, fps)
+
+            capturer?.changeCaptureFormat(
+                width,
+                height,
+                fps
+            )
+
+            onStatus(
+                "Video quality selected: ${width}x${height} at ${fps} fps."
+            )
+
         } catch (e: Exception) {
-            onStatus("Could not change video quality: ${e.message}")
+
+            onStatus(
+                "Could not change video quality: ${e.message}"
+            )
         }
     }
 
+    // ---------------------------------------------------------
+    // CLEANUP
+    // ---------------------------------------------------------
+
     fun close() {
+
+        synchronized(lock) {
+
+            if (closed) return
+
+            closed = true
+        }
+
+        try {
+            remoteVideoTrack?.removeSink(
+                remoteRenderer
+            )
+        } catch (_: Exception) {
+        }
+
+        remoteVideoTrack = null
+        remoteAudioTrack = null
+
         try {
             capturer?.stopCapture()
         } catch (_: Exception) {
         }
 
-        capturer?.dispose()
-        localVideoTrack?.dispose()
-        videoSource?.dispose()
-        localAudioTrack?.dispose()
-        audioSource?.dispose()
+        try {
+            capturer?.dispose()
+        } catch (_: Exception) {
+        }
 
-        peer?.close()
-        peer?.dispose()
+        capturer = null
 
-        factory.dispose()
-        audioModule.release()
-        remoteRenderer.release()
-        egl.release()
+        try {
+            textureHelper?.dispose()
+        } catch (_: Exception) {
+        }
+
+        textureHelper = null
+
+        try {
+            localVideoTrack?.dispose()
+        } catch (_: Exception) {
+        }
+
+        localVideoTrack = null
+
+        try {
+            videoSource?.dispose()
+        } catch (_: Exception) {
+        }
+
+        videoSource = null
+
+        try {
+            localAudioTrack?.dispose()
+        } catch (_: Exception) {
+        }
+
+        localAudioTrack = null
+
+        try {
+            audioSource?.dispose()
+        } catch (_: Exception) {
+        }
+
+        audioSource = null
+
+        try {
+            peer?.close()
+        } catch (_: Exception) {
+        }
+
+        try {
+            peer?.dispose()
+        } catch (_: Exception) {
+        }
+
+        peer = null
+
+        try {
+            if (initialized) {
+                remoteRenderer.release()
+                initialized = false
+            }
+        } catch (_: Exception) {
+        }
+
+        try {
+            factory.dispose()
+        } catch (_: Exception) {
+        }
+
+        try {
+            audioModule.release()
+        } catch (_: Exception) {
+        }
+
+        try {
+            egl.release()
+        } catch (_: Exception) {
+        }
     }
 }
