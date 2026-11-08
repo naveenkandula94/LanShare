@@ -59,9 +59,11 @@ jobs:
           ls -la
           test -f settings.gradle.kts
           test -f app/build.gradle.kts
-
+          
       - name: Build APK
-        run: gradle --no-daemon :app:assembleDebug --stacktrace
+        run: |
+          gradle --no-daemon :app:compileDebugKotlin --stacktrace --info 2>&1 | tee build.log
+          grep -n -E "^e: | error:|Unresolved reference|MainActivity.kt|RtcPeer.kt" build.log || true
 
       - name: Verify APK
         run: |
