@@ -1,52 +1,191 @@
+
 package com.example.lanshare
 
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.PrintWriter
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * TCP signaling server.
+ *
+ * One receiver connects to the sender.
+ * The receiver sends an SDP offer.
+ * The sender responds with an SDP answer.
+ */
 class LanSignalServer(
     private val rtc: RtcPeer,
     private val onStatus: (String) -> Unit,
     private val sessionPassword: String
 ) {
-    private val executor = Executors.newSingleThreadExecutor()
-    @Volatile private var server: ServerSocket? = null
+
+    private val executor =
+        Executors.newSingleThreadExecutor()
+
+    private val running =
+        AtomicBoolean(false)
+
+    @Volatile
+    private var server: ServerSocket? = null
 
     fun start(port: Int = 47831) {
+
+        if (!running.compareAndSet(false, true)) {
+            onStatus("Signaling server is already running.")
+            return
+        }
+
         executor.execute {
+
             try {
-                server = ServerSocket(port)
-                onStatus("Waiting for the receiver on TCP port $port.")
-                server!!.accept().use { socket ->
+
+                val socketServer = ServerSocket()
+
+                server = socketServer
+
+                socketServer.reuseAddress = true
+
+                socketServer.bind(
+                    InetSocketAddress(port)
+                )
+
+                onStatus(
+                    "Waiting for receiver on TCP port $port..."
+                )
+
+                socketServer.accept().use { socket ->
+
                     socket.soTimeout = 60000
-                    val input = BufferedReader(InputStreamReader(socket.getInputStream()))
-                    val output = PrintWriter(socket.getOutputStream(), true)
-                    val line = input.readLine() ?: error("Receiver disconnected before offer.")
-                    val request = JSONObject(line)
-                    val suppliedPassword = request.optString("password")
-                    if (sessionPassword.isNotEmpty() && suppliedPassword != sessionPassword) {
-                        output.println(JSONObject().put("error", "Incorrect connection password").toString())
-                        error("Receiver supplied an incorrect password.")
-                    }
-                    val offer = request.getString("sdp")
-                    onStatus("Receiver authenticated. Negotiating WebRTC…")
-                    val answer = rtc.acceptOfferAndCreateAnswer(offer)
-                    check(!answer.startsWith("ERROR:")) { answer }
-                    output.println(JSONObject().put("sdp", answer).toString())
-                    onStatus("Answer sent. Connecting screen and voice…")
+
+                    socket.tcpNoDelay = true
+
+                    handleReceiver(socket)
                 }
+
             } catch (e: Exception) {
-                onStatus("Signaling error: ${e.message}")
+
+                if (running.get()) {
+
+                    onStatus(
+                        "Signaling error: ${e.javaClass.simpleName}: ${e.message}"
+                    )
+                }
+
+            } finally {
+
+                running.set(false)
+
+                try {
+                    server?.close()
+                } catch (_: Exception) {
+                }
+
+                server = null
             }
         }
     }
 
+    private fun handleReceiver(socket: Socket) {
+
+        val input = BufferedReader(
+            InputStreamReader(
+                socket.getInputStream(),
+                Charsets.UTF_8
+            )
+        )
+
+        val output = PrintWriter(
+            socket.getOutputStream(),
+            true
+        )
+
+        onStatus(
+            "Receiver connected. Checking password..."
+        )
+
+        val line = input.readLine()
+            ?: error("Receiver disconnected before sending offer.")
+
+        require(line.length <= MAX_MESSAGE_LENGTH) {
+            "Signaling message is too large."
+        }
+
+        val request = JSONObject(line)
+
+        val suppliedPassword =
+            request.optString("password", "")
+
+        if (
+            sessionPassword.isNotEmpty() &&
+            suppliedPassword != sessionPassword
+        ) {
+
+            output.println(
+                JSONObject()
+                    .put("error", "Incorrect connection password")
+                    .toString()
+            )
+
+            error("Incorrect connection password.")
+        }
+
+        val offer = request.optString("sdp", "")
+
+        require(offer.isNotBlank()) {
+            "Receiver did not provide a valid SDP offer."
+        }
+
+        require(offer.length <= MAX_MESSAGE_LENGTH) {
+            "SDP offer is too large."
+        }
+
+        onStatus(
+            "Receiver authenticated. Negotiating WebRTC..."
+        )
+
+        val answer =
+            rtc.acceptOfferAndCreateAnswer(offer)
+
+        check(!answer.startsWith("ERROR:")) {
+            answer
+        }
+
+        val response = JSONObject()
+            .put("sdp", answer)
+
+        output.println(response.toString())
+
+        check(!output.checkError()) {
+            "Could not send SDP answer to receiver."
+        }
+
+        onStatus(
+            "Answer sent. Waiting for WebRTC connection..."
+        )
+    }
+
     fun stop() {
-        try { server?.close() } catch (_: Exception) {}
+
+        running.set(false)
+
+        try {
+            server?.close()
+        } catch (_: Exception) {
+        }
+
+        server = null
+
         executor.shutdownNow()
+    }
+
+    companion object {
+
+        private const val MAX_MESSAGE_LENGTH =
+            2 * 1024 * 1024
     }
 }
