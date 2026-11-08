@@ -1,4 +1,3 @@
-
 package com.example.lanshare
 
 import android.Manifest
@@ -20,6 +19,7 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.util.Log
 import android.widget.Toast
 
 import com.google.zxing.BarcodeFormat
@@ -56,8 +56,14 @@ class MainActivity : Activity() {
 
     private val projectionRequest = 7001
     private val audioRequest = 7002
+    private val cameraRequest = 7003
 
     private var startingShare = false
+
+    companion object {
+        private const val SIGNAL_PORT = 47831
+        private const val TAG = "LanShare"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -185,7 +191,6 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------
 
     private fun hasAudioPermission(): Boolean {
-
         return checkSelfPermission(
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
@@ -247,6 +252,8 @@ class MainActivity : Activity() {
 
         } catch (e: Exception) {
 
+            Log.e(TAG, "Screen permission request failed", e)
+
             status.text =
                 "Could not request screen permission: ${e.javaClass.simpleName}: ${e.message}"
         }
@@ -285,6 +292,23 @@ class MainActivity : Activity() {
                 status.text =
                     "Microphone permission denied. Voice sharing cannot start."
             }
+
+            return
+        }
+
+        if (requestCode == cameraRequest) {
+
+            if (
+                grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            ) {
+                startQrScanner()
+            } else {
+                status.text =
+                    "Camera permission denied. Allow camera access to scan QR codes."
+            }
+
+            return
         }
     }
 
@@ -294,6 +318,19 @@ class MainActivity : Activity() {
 
     private fun startQrScanner() {
 
+        if (
+            checkSelfPermission(Manifest.permission.CAMERA) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+
+            requestPermissions(
+                arrayOf(Manifest.permission.CAMERA),
+                cameraRequest
+            )
+
+            return
+        }
+
         try {
 
             IntentIntegrator(this)
@@ -301,7 +338,7 @@ class MainActivity : Activity() {
                     IntentIntegrator.QR_CODE
                 )
                 .setPrompt(
-                    "Scan the LAN Share code from the sender phone"
+                    "Scan the LAN Share pairing QR code"
                 )
                 .setBeepEnabled(false)
                 .setOrientationLocked(false)
@@ -309,8 +346,10 @@ class MainActivity : Activity() {
 
         } catch (e: Exception) {
 
+            Log.e(TAG, "QR scanner launch failed", e)
+
             status.text =
-                "Could not open QR scanner: ${e.message}"
+                "Scanner error: ${e.javaClass.simpleName}: ${e.message}"
         }
     }
 
@@ -354,16 +393,17 @@ class MainActivity : Activity() {
         if (requestCode == projectionRequest) {
 
             if (resultCode == RESULT_OK && data != null) {
-
                 startSharing(data)
-
             } else {
-
                 status.text =
                     "Screen-sharing permission was not granted."
             }
         }
     }
+
+    // ---------------------------------------------------------
+    // READ PAIRING QR
+    // ---------------------------------------------------------
 
     private fun handleScannedQr(raw: String) {
 
@@ -377,10 +417,20 @@ class MainActivity : Activity() {
             val port =
                 uri.getQueryParameter("port")
 
+            val validIp =
+                !scannedIp.isNullOrBlank() &&
+                scannedIp.matches(
+                    Regex("""^(?:\d{1,3}\.){3}\d{1,3}$""")
+                ) &&
+                scannedIp.split(".").all {
+                    (it.toIntOrNull() ?: -1) in 0..255
+                }
+
             if (
                 uri.scheme == "lanshare" &&
                 uri.host == "connect" &&
-                !scannedIp.isNullOrBlank()
+                validIp &&
+                port == SIGNAL_PORT.toString()
             ) {
 
                 ipInput.setText(scannedIp)
@@ -391,10 +441,12 @@ class MainActivity : Activity() {
             } else {
 
                 status.text =
-                    "This is not a valid LAN Share QR code."
+                    "Invalid LAN Share QR code or unsupported port."
             }
 
         } catch (e: Exception) {
+
+            Log.e(TAG, "Could not read QR code", e)
 
             status.text =
                 "Could not read QR code: ${e.message}"
@@ -415,24 +467,16 @@ class MainActivity : Activity() {
 
             status.text = "Starting screen sharing..."
 
-            // Start the foreground service only after the user
-            // has approved the MediaProjection permission.
-
             val serviceIntent = Intent(
                 this,
                 ProjectionForegroundService::class.java
             )
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-
                 startForegroundService(serviceIntent)
-
             } else {
-
                 startService(serviceIntent)
             }
-
-            // Initialize WebRTC.
 
             val newRtc = RtcPeer(
                 this,
@@ -446,15 +490,11 @@ class MainActivity : Activity() {
 
             rtc = newRtc
 
-            // Start screen capture using Android's permission result.
-
             newRtc.startScreenCapture(permissionData)
 
             check(newRtc.createPeer()) {
                 "Could not create WebRTC peer connection."
             }
-
-            // Start signaling server.
 
             val newServer = LanSignalServer(
                 newRtc,
@@ -470,9 +510,7 @@ class MainActivity : Activity() {
 
             signalServer = newServer
 
-            newServer.start()
-
-            // Get local Wi-Fi address.
+            newServer.start(SIGNAL_PORT)
 
             val address = LanIp.address(this)
 
@@ -492,6 +530,8 @@ class MainActivity : Activity() {
                 "Screen sharing is ready. Scan the QR code or enter this IP on the other phone: $address"
 
         } catch (e: Exception) {
+
+            Log.e(TAG, "Could not start sharing", e)
 
             val errorMessage =
                 "Could not start sharing: ${e.javaClass.simpleName}: ${e.message}"
@@ -571,9 +611,10 @@ class MainActivity : Activity() {
                     offer
                 }
 
-                Socket(host, 47831).use { socket ->
+                Socket(host, SIGNAL_PORT).use { socket ->
 
                     socket.soTimeout = 60000
+                    socket.tcpNoDelay = true
 
                     val output = PrintWriter(
                         socket.getOutputStream(),
@@ -600,10 +641,7 @@ class MainActivity : Activity() {
                         JSONObject(answerLine)
 
                     if (answerJson.has("error")) {
-
-                        error(
-                            answerJson.getString("error")
-                        )
+                        error(answerJson.getString("error"))
                     }
 
                     newClient.acceptAnswer(
@@ -612,12 +650,13 @@ class MainActivity : Activity() {
                 }
 
                 runOnUiThread {
-
                     status.text =
                         "Connected. Waiting for screen and voice..."
                 }
 
             } catch (e: Exception) {
+
+                Log.e(TAG, "Receiver connection failed", e)
 
                 try {
                     client?.close()
@@ -629,7 +668,6 @@ class MainActivity : Activity() {
                 }
 
                 runOnUiThread {
-
                     status.text =
                         "Connection failed: ${e.javaClass.simpleName}: ${e.message}"
                 }
@@ -638,7 +676,7 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------
-    // QR GENERATION
+    // GENERATE SENDER QR
     // ---------------------------------------------------------
 
     private fun showPairingQr(address: String) {
@@ -646,7 +684,7 @@ class MainActivity : Activity() {
         try {
 
             val content =
-                "lanshare://connect?ip=$address&port=47831"
+                "lanshare://connect?ip=$address&port=$SIGNAL_PORT"
 
             val matrix = QRCodeWriter().encode(
                 content,
@@ -662,7 +700,6 @@ class MainActivity : Activity() {
             )
 
             for (x in 0 until 420) {
-
                 for (y in 0 until 420) {
 
                     bitmap.setPixel(
@@ -681,6 +718,8 @@ class MainActivity : Activity() {
             qrImage.visibility = View.VISIBLE
 
         } catch (e: Exception) {
+
+            Log.e(TAG, "QR generation failed", e)
 
             status.text =
                 "QR generation failed: ${e.message}"
