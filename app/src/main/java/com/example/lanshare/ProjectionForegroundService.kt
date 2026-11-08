@@ -1,4 +1,3 @@
-
 package com.example.lanshare
 
 import android.app.Notification
@@ -20,15 +19,14 @@ class ProjectionForegroundService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager =
-                getSystemService(NotificationManager::class.java)
+            val manager = getSystemService(NotificationManager::class.java)
 
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "LAN Share screen and voice",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps screen and microphone sharing active."
+                description = "Keeps screen sharing active."
                 setShowBadge(false)
             }
 
@@ -62,36 +60,60 @@ class ProjectionForegroundService : Service() {
         try {
             val notification = buildNotification()
 
-            if (Build.VERSION.SDK_INT >= 30) {
-                val types =
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            when {
+                Build.VERSION.SDK_INT >= 30 -> {
+                    val types =
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
 
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    types
-                )
-            } else if (Build.VERSION.SDK_INT >= 29) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                )
-            } else {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification
-                )
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        types
+                    )
+                }
+
+                Build.VERSION.SDK_INT >= 29 -> {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                    )
+                }
+
+                else -> {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification
+                    )
+                }
             }
 
-            return START_NOT_STICKY
+            // Notify MainActivity only after startForeground succeeds.
+            sendAppBroadcast(ACTION_READY)
 
         } catch (e: Exception) {
             Log.e(TAG, "Foreground service startup failed", e)
+
+            sendAppBroadcast(
+                ACTION_FAILED,
+                "${e.javaClass.simpleName}: ${e.message}"
+            )
+
             stopSelf(startId)
-            return START_NOT_STICKY
         }
+
+        return START_NOT_STICKY
+    }
+
+    private fun sendAppBroadcast(action: String, error: String? = null) {
+        val broadcast = Intent(action).apply {
+            setPackage(packageName)
+            if (error != null) {
+                putExtra(EXTRA_ERROR, error)
+            }
+        }
+        sendBroadcast(broadcast)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -103,11 +125,14 @@ class ProjectionForegroundService : Service() {
             @Suppress("DEPRECATION")
             stopForeground(true)
         }
-
         super.onDestroy()
     }
 
     companion object {
+        const val ACTION_READY = "com.example.lanshare.SERVICE_READY"
+        const val ACTION_FAILED = "com.example.lanshare.SERVICE_FAILED"
+        const val EXTRA_ERROR = "service_error"
+
         private const val TAG = "LanShare"
         private const val CHANNEL_ID = "lan_share_projection"
         private const val NOTIFICATION_ID = 41
