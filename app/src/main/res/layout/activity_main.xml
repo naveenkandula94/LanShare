@@ -1,54 +1,315 @@
+
 <?xml version="1.0" encoding="utf-8"?>
+
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent" android:layout_height="match_parent"
-    android:fillViewport="true">
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="vertical" android:padding="20dp">
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="LAN Share" android:textSize="28sp" android:textStyle="bold"
-            android:paddingBottom="6dp"/>
-        <TextView android:id="@+id/statusText" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="Connect both phones to the same Wi-Fi."
-            android:textSize="15sp" android:paddingBottom="14dp"/>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="Connection password (optional)" android:textStyle="bold"/>
-        <EditText android:id="@+id/passwordInput" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="Set the same password on both phones"
-            android:inputType="textPassword" android:singleLine="true"/>
-        <Button android:id="@+id/shareButton" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="Share My Screen + Voice"/>
-        <TextView android:id="@+id/ipText" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="Sender IP will appear here"
-            android:paddingTop="12dp" android:textStyle="bold"/>
-        <ImageView android:id="@+id/qrImage" android:layout_width="180dp"
-            android:layout_height="180dp" android:layout_gravity="center"
-            android:contentDescription="Connection QR code" android:visibility="gone"/>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="Or connect to another phone" android:textStyle="bold"
-            android:paddingTop="16dp"/>
-        <EditText android:id="@+id/ipInput" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="Sender IP, e.g. 192.168.1.25"
-            android:inputType="text" android:singleLine="true"/>
-        <Button android:id="@+id/scanQrButton" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="Scan Sender QR Code"/>
-        <Button android:id="@+id/watchButton" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="Watch Other Phone + Voice"/>
-        <Button android:id="@+id/reconnectButton" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="Reconnect"/>
-        <Button android:id="@+id/muteButton" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="Mute Microphone"/>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="Video quality" android:textStyle="bold" android:paddingTop="10dp"/>
-        <Spinner android:id="@+id/qualitySpinner" android:layout_width="match_parent"
-            android:layout_height="wrap_content"/>
-        <org.webrtc.SurfaceViewRenderer android:id="@+id/remoteRenderer"
-            android:layout_width="match_parent" android:layout_height="240dp"
-            android:layout_marginTop="14dp"/>
-        <Button android:id="@+id/stopButton" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="Stop / Disconnect"
-            android:layout_marginTop="12dp"/>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="File transfer and session recording are not yet enabled in this build. Use only trusted Wi-Fi; password authentication protects pairing but does not encrypt the media/signaling transport."
-            android:textSize="12sp" android:paddingTop="12dp"/>
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F2F5FA"
+    android:fillViewport="true"
+    android:clipToPadding="false">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="18dp">
+
+        <!-- Header -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="LAN SHARE"
+            android:textColor="#1769E0"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.12"
+            android:paddingBottom="5dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Share your screen."
+            android:textColor="#172033"
+            android:textSize="29sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Connect two phones on the same Wi-Fi network."
+            android:textColor="#687386"
+            android:textSize="14sp"
+            android:paddingTop="5dp"
+            android:paddingBottom="18dp" />
+
+        <!-- Status card -->
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#FFFFFF"
+            android:padding="16dp"
+            android:elevation="2dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="CONNECTION STATUS"
+                android:textColor="#1769E0"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Ready. Connect both phones to the same Wi-Fi."
+                android:textColor="#263247"
+                android:textSize="15sp"
+                android:paddingTop="8dp" />
+
+        </LinearLayout>
+
+        <!-- Sender section -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="01  SHARE THIS PHONE"
+            android:textColor="#172033"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingTop="22dp"
+            android:paddingBottom="10dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#FFFFFF"
+            android:padding="16dp"
+            android:elevation="2dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Session password (optional)"
+                android:textColor="#263247"
+                android:textStyle="bold"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/passwordInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Use the same password on both phones"
+                android:inputType="textPassword"
+                android:singleLine="true"
+                android:importantForAutofill="no"
+                android:padding="12dp" />
+
+            <Button
+                android:id="@+id/shareButton"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:text="Share My Screen + Voice"
+                android:textAllCaps="false"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:backgroundTint="#1769E0"
+                android:textColor="#FFFFFF"
+                android:layout_marginTop="12dp" />
+
+            <TextView
+                android:id="@+id/ipText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Sender IP will appear here"
+                android:textColor="#1769E0"
+                android:textStyle="bold"
+                android:textSize="15sp"
+                android:paddingTop="14dp"
+                android:gravity="center" />
+
+            <ImageView
+                android:id="@+id/qrImage"
+                android:layout_width="220dp"
+                android:layout_height="220dp"
+                android:layout_gravity="center"
+                android:layout_marginTop="12dp"
+                android:padding="8dp"
+                android:background="#FFFFFF"
+                android:contentDescription="LAN Share pairing QR code"
+                android:scaleType="fitCenter"
+                android:visibility="gone" />
+
+        </LinearLayout>
+
+        <!-- Receiver section -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="02  CONNECT TO ANOTHER PHONE"
+            android:textColor="#172033"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingTop="22dp"
+            android:paddingBottom="10dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#FFFFFF"
+            android:padding="16dp"
+            android:elevation="2dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Sender Wi-Fi IP address"
+                android:textColor="#263247"
+                android:textStyle="bold"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/ipInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Example: 192.168.1.25"
+                android:inputType="text"
+                android:singleLine="true"
+                android:padding="12dp" />
+
+            <Button
+                android:id="@+id/scanQrButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:text="Scan Pairing QR Code"
+                android:textAllCaps="false"
+                android:backgroundTint="#E8F0FE"
+                android:textColor="#1558B0"
+                android:layout_marginTop="10dp" />
+
+            <Button
+                android:id="@+id/watchButton"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:text="Watch Other Phone + Voice"
+                android:textAllCaps="false"
+                android:textStyle="bold"
+                android:backgroundTint="#168653"
+                android:textColor="#FFFFFF"
+                android:layout_marginTop="8dp" />
+
+            <Button
+                android:id="@+id/reconnectButton"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="Reconnect"
+                android:textAllCaps="false"
+                android:layout_marginTop="6dp" />
+
+        </LinearLayout>
+
+        <!-- Controls -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="03  SESSION CONTROLS"
+            android:textColor="#172033"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingTop="22dp"
+            android:paddingBottom="10dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#FFFFFF"
+            android:padding="16dp"
+            android:elevation="2dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Video quality"
+                android:textColor="#263247"
+                android:textStyle="bold"
+                android:textSize="14sp" />
+
+            <Spinner
+                android:id="@+id/qualitySpinner"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="5dp" />
+
+            <Button
+                android:id="@+id/muteButton"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="Mute Microphone"
+                android:textAllCaps="false"
+                android:layout_marginTop="8dp" />
+
+            <Button
+                android:id="@+id/stopButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="Stop / Disconnect"
+                android:textAllCaps="false"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#C73535"
+                android:layout_marginTop="10dp" />
+
+        </LinearLayout>
+
+        <!-- Remote screen -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="04  REMOTE SCREEN"
+            android:textColor="#172033"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingTop="22dp"
+            android:paddingBottom="10dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#111827"
+            android:padding="6dp"
+            android:elevation="2dp">
+
+            <org.webrtc.SurfaceViewRenderer
+                android:id="@+id/remoteRenderer"
+                android:layout_width="match_parent"
+                android:layout_height="240dp"
+                android:contentDescription="Remote phone screen" />
+
+        </LinearLayout>
+
+        <!-- Footer -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Both devices must be on the same reachable network. Screen capture requires your approval. Microphone access is used for voice sharing. Do not use untrusted Wi-Fi networks."
+            android:textColor="#687386"
+            android:textSize="12sp"
+            android:lineSpacingExtra="3dp"
+            android:paddingTop="18dp"
+            android:paddingBottom="20dp" />
+
     </LinearLayout>
+
 </ScrollView>
