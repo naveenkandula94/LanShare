@@ -1,32 +1,28 @@
-
 package com.example.lanshare
 
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjection
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import org.webrtc.*
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
-/**
- * WebRTC engine for LAN Share.
- *
- * Sender:
- * - Captures the Android screen.
- * - Sends screen video and microphone audio.
- * - Receives the other phone's microphone audio.
- *
- * Receiver:
- * - Sends microphone audio.
- * - Receives screen video and microphone audio.
- */
 class RtcPeer(
     private val context: Context,
     private val remoteRenderer: SurfaceViewRenderer,
     private val onStatus: (String) -> Unit
 ) {
+
+    companion object {
+        private const val TAG = "LanShareRtc"
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val egl = EglBase.create()
 
@@ -54,14 +50,19 @@ class RtcPeer(
     private var captureHeight = 720
     private var captureFps = 15
 
+    @Volatile
     private var initialized = false
+
+    @Volatile
     private var closed = false
 
     private val iceGathered = CountDownLatch(1)
-
     private val lock = Any()
 
     init {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "RtcPeer must be initialized on the Android main thread."
+        }
 
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions
@@ -85,11 +86,8 @@ class RtcPeer(
             )
             .createPeerConnectionFactory()
 
-        remoteRenderer.init(
-            egl.eglBaseContext,
-            null
-        )
-
+        // SurfaceViewRenderer must be initialized on the UI thread.
+        remoteRenderer.init(egl.eglBaseContext, null)
         remoteRenderer.setEnableHardwareScaler(true)
         remoteRenderer.setMirror(false)
 
@@ -101,7 +99,6 @@ class RtcPeer(
     // ---------------------------------------------------------
 
     fun startScreenCapture(permissionData: Intent) {
-
         check(!closed) {
             "WebRTC session has already been closed."
         }
@@ -111,7 +108,6 @@ class RtcPeer(
         }
 
         val source = factory.createVideoSource(false)
-
         videoSource = source
 
         val helper = SurfaceTextureHelper.create(
@@ -124,12 +120,12 @@ class RtcPeer(
         val screenCapturer = ScreenCapturerAndroid(
             permissionData,
             object : MediaProjection.Callback() {
-
                 override fun onStop() {
-
-                    onStatus(
-                        "Android stopped screen capture."
-                    )
+                    mainHandler.post {
+                        if (!closed) {
+                            onStatus("Android stopped screen capture.")
+                        }
+                    }
                 }
             }
         )
@@ -137,7 +133,6 @@ class RtcPeer(
         capturer = screenCapturer
 
         try {
-
             screenCapturer.initialize(
                 helper,
                 context.applicationContext,
@@ -150,19 +145,19 @@ class RtcPeer(
                 captureFps
             )
 
-            localVideoTrack = factory.createVideoTrack(
+            val track = factory.createVideoTrack(
                 "lan-share-screen-video",
                 source
             )
 
-            localVideoTrack?.setEnabled(true)
+            localVideoTrack = track
+            track.setEnabled(true)
 
             onStatus(
                 "Screen capture started: ${captureWidth}x${captureHeight} at ${captureFps} fps."
             )
 
         } catch (e: Exception) {
-
             try {
                 screenCapturer.stopCapture()
             } catch (_: Exception) {
@@ -201,7 +196,6 @@ class RtcPeer(
     // ---------------------------------------------------------
 
     fun createPeer(asReceiver: Boolean = false): Boolean {
-
         check(!closed) {
             "WebRTC session has already been closed."
         }
@@ -211,23 +205,18 @@ class RtcPeer(
         }
 
         if (!asReceiver) {
-
             check(localVideoTrack != null) {
                 "Start screen capture before creating the sender peer."
             }
         }
 
         val iceServers = listOf(
-
             PeerConnection.IceServer
                 .builder("stun:stun.l.google.com:19302")
                 .createIceServer()
-
         )
 
-        val config = PeerConnection.RTCConfiguration(
-            iceServers
-        )
+        val config = PeerConnection.RTCConfiguration(iceServers)
 
         config.sdpSemantics =
             PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -239,18 +228,13 @@ class RtcPeer(
                 override fun onSignalingChange(
                     state: PeerConnection.SignalingState
                 ) {
-                    onStatus(
-                        "Signaling state: $state"
-                    )
+                    reportStatus("Signaling state: $state")
                 }
 
                 override fun onIceConnectionChange(
                     state: PeerConnection.IceConnectionState
                 ) {
-
-                    onStatus(
-                        "WebRTC connection: $state"
-                    )
+                    reportStatus("WebRTC connection: $state")
                 }
 
                 override fun onIceConnectionReceivingChange(
@@ -261,7 +245,6 @@ class RtcPeer(
                 override fun onIceGatheringChange(
                     state: PeerConnection.IceGatheringState
                 ) {
-
                     if (
                         state ==
                         PeerConnection.IceGatheringState.COMPLETE
@@ -270,11 +253,8 @@ class RtcPeer(
                     }
                 }
 
-                override fun onIceCandidate(
-                    candidate: IceCandidate
-                ) {
-                    // ICE candidates are included in the SDP
-                    // after gathering completes.
+                override fun onIceCandidate(candidate: IceCandidate) {
+                    // Candidates are included in SDP after gathering.
                 }
 
                 override fun onIceCandidatesRemoved(
@@ -282,19 +262,13 @@ class RtcPeer(
                 ) {
                 }
 
-                override fun onAddStream(
-                    stream: MediaStream
-                ) {
+                override fun onAddStream(stream: MediaStream) {
                 }
 
-                override fun onRemoveStream(
-                    stream: MediaStream
-                ) {
+                override fun onRemoveStream(stream: MediaStream) {
                 }
 
-                override fun onDataChannel(
-                    channel: DataChannel
-                ) {
+                override fun onDataChannel(channel: DataChannel) {
                 }
 
                 override fun onRenegotiationNeeded() {
@@ -304,36 +278,24 @@ class RtcPeer(
                     receiver: RtpReceiver,
                     mediaStreams: Array<out MediaStream>
                 ) {
-
-                    handleRemoteTrack(
-                        receiver.track()
-                    )
+                    handleRemoteTrack(receiver.track())
                 }
 
-                override fun onTrack(
-                    transceiver: RtpTransceiver
-                ) {
-
+                override fun onTrack(transceiver: RtpTransceiver) {
                     handleRemoteTrack(
                         transceiver.receiver.track()
                     )
                 }
             }
-        )
+        ) ?: return false
 
         peer = connection
-            ?: return false
 
         try {
+            // Local microphone track.
+            val audioConstraints = MediaConstraints()
 
-            // Local microphone audio track.
-
-            val constraints = MediaConstraints()
-
-            val source = factory.createAudioSource(
-                constraints
-            )
-
+            val source = factory.createAudioSource(audioConstraints)
             audioSource = source
 
             val audioTrack = factory.createAudioTrack(
@@ -342,7 +304,6 @@ class RtcPeer(
             )
 
             localAudioTrack = audioTrack
-
             audioTrack.setEnabled(true)
 
             connection.addTrack(
@@ -351,23 +312,17 @@ class RtcPeer(
             )
 
             if (asReceiver) {
-
-                // Receiver requests the sender's screen video.
-
-                val videoInit =
-                    RtpTransceiver.RtpTransceiverInit(
-                        RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
-                    )
+                // Receiver requests sender's screen video.
+                val videoInit = RtpTransceiver.RtpTransceiverInit(
+                    RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
+                )
 
                 connection.addTransceiver(
                     MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
                     videoInit
                 )
-
             } else {
-
                 // Sender publishes its screen video.
-
                 val screenTrack = localVideoTrack
                     ?: error("Screen video track is unavailable.")
 
@@ -380,9 +335,7 @@ class RtcPeer(
             return true
 
         } catch (e: Exception) {
-
             close()
-
             throw IllegalStateException(
                 "Could not configure WebRTC tracks: ${e.message}",
                 e
@@ -394,49 +347,41 @@ class RtcPeer(
     // REMOTE TRACKS
     // ---------------------------------------------------------
 
-    private fun handleRemoteTrack(
-        track: MediaStreamTrack?
-    ) {
+    private fun handleRemoteTrack(track: MediaStreamTrack?) {
+        mainHandler.post {
+            if (closed || track == null) return@post
 
-        when (track) {
+            when (track) {
+                is VideoTrack -> {
+                    synchronized(lock) {
+                        if (remoteVideoTrack !== track) {
+                            remoteVideoTrack?.removeSink(remoteRenderer)
 
-            is VideoTrack -> {
-
-                synchronized(lock) {
-
-                    if (remoteVideoTrack !== track) {
-
-                        remoteVideoTrack?.removeSink(
-                            remoteRenderer
-                        )
-
-                        remoteVideoTrack = track
-
-                        track.setEnabled(true)
-
-                        track.addSink(
-                            remoteRenderer
-                        )
+                            remoteVideoTrack = track
+                            track.setEnabled(true)
+                            track.addSink(remoteRenderer)
+                        }
                     }
+
+                    onStatus("Receiving screen video.")
                 }
 
-                onStatus(
-                    "Receiving screen video."
-                )
+                is AudioTrack -> {
+                    synchronized(lock) {
+                        remoteAudioTrack = track
+                        track.setEnabled(true)
+                    }
+
+                    onStatus("Receiving remote microphone audio.")
+                }
             }
+        }
+    }
 
-            is AudioTrack -> {
-
-                synchronized(lock) {
-
-                    remoteAudioTrack = track
-
-                    track.setEnabled(true)
-                }
-
-                onStatus(
-                    "Receiving remote microphone audio."
-                )
+    private fun reportStatus(message: String) {
+        mainHandler.post {
+            if (!closed) {
+                onStatus(message)
             }
         }
     }
@@ -446,7 +391,6 @@ class RtcPeer(
     // ---------------------------------------------------------
 
     fun makeOffer(): String {
-
         val connection = requireNotNull(peer) {
             "Peer connection not initialized."
         }
@@ -460,27 +404,16 @@ class RtcPeer(
                 override fun onCreateSuccess(
                     description: SessionDescription
                 ) {
-
                     connection.setLocalDescription(
                         object : SdpObserver {
 
                             override fun onSetSuccess() {
-
-                                result.set(
-                                    description.description
-                                )
-
+                                result.set(description.description)
                                 latch.countDown()
                             }
 
-                            override fun onSetFailure(
-                                error: String
-                            ) {
-
-                                result.set(
-                                    "ERROR:$error"
-                                )
-
+                            override fun onSetFailure(error: String) {
+                                result.set("ERROR:$error")
                                 latch.countDown()
                             }
 
@@ -489,9 +422,7 @@ class RtcPeer(
                             ) {
                             }
 
-                            override fun onCreateFailure(
-                                p0: String
-                            ) {
+                            override fun onCreateFailure(p0: String) {
                             }
                         },
                         description
@@ -501,34 +432,20 @@ class RtcPeer(
                 override fun onSetSuccess() {
                 }
 
-                override fun onCreateFailure(
-                    error: String
-                ) {
-
-                    result.set(
-                        "ERROR:$error"
-                    )
-
+                override fun onCreateFailure(error: String) {
+                    result.set("ERROR:$error")
                     latch.countDown()
                 }
 
-                override fun onSetFailure(
-                    error: String
-                ) {
-
-                    result.set(
-                        "ERROR:$error"
-                    )
-
+                override fun onSetFailure(error: String) {
+                    result.set("ERROR:$error")
                     latch.countDown()
                 }
             },
             MediaConstraints()
         )
 
-        check(
-            latch.await(20, TimeUnit.SECONDS)
-        ) {
+        check(latch.await(20, TimeUnit.SECONDS)) {
             "Timed out creating WebRTC offer."
         }
 
@@ -539,7 +456,6 @@ class RtcPeer(
         }
 
         awaitIce()
-
         return offer
     }
 
@@ -547,10 +463,7 @@ class RtcPeer(
     // ACCEPT OFFER AND CREATE ANSWER
     // ---------------------------------------------------------
 
-    fun acceptOfferAndCreateAnswer(
-        offerSdp: String
-    ): String {
-
+    fun acceptOfferAndCreateAnswer(offerSdp: String): String {
         val connection = requireNotNull(peer) {
             "Peer connection not initialized."
         }
@@ -570,27 +483,16 @@ class RtcPeer(
                 override fun onCreateSuccess(
                     description: SessionDescription
                 ) {
-
                     connection.setLocalDescription(
                         object : SdpObserver {
 
                             override fun onSetSuccess() {
-
-                                result.set(
-                                    description.description
-                                )
-
+                                result.set(description.description)
                                 latch.countDown()
                             }
 
-                            override fun onSetFailure(
-                                error: String
-                            ) {
-
-                                result.set(
-                                    "ERROR:$error"
-                                )
-
+                            override fun onSetFailure(error: String) {
+                                result.set("ERROR:$error")
                                 latch.countDown()
                             }
 
@@ -599,9 +501,7 @@ class RtcPeer(
                             ) {
                             }
 
-                            override fun onCreateFailure(
-                                p0: String
-                            ) {
+                            override fun onCreateFailure(p0: String) {
                             }
                         },
                         description
@@ -611,34 +511,20 @@ class RtcPeer(
                 override fun onSetSuccess() {
                 }
 
-                override fun onCreateFailure(
-                    error: String
-                ) {
-
-                    result.set(
-                        "ERROR:$error"
-                    )
-
+                override fun onCreateFailure(error: String) {
+                    result.set("ERROR:$error")
                     latch.countDown()
                 }
 
-                override fun onSetFailure(
-                    error: String
-                ) {
-
-                    result.set(
-                        "ERROR:$error"
-                    )
-
+                override fun onSetFailure(error: String) {
+                    result.set("ERROR:$error")
                     latch.countDown()
                 }
             },
             MediaConstraints()
         )
 
-        check(
-            latch.await(20, TimeUnit.SECONDS)
-        ) {
+        check(latch.await(20, TimeUnit.SECONDS)) {
             "Timed out creating WebRTC answer."
         }
 
@@ -649,7 +535,6 @@ class RtcPeer(
         }
 
         awaitIce()
-
         return answer
     }
 
@@ -657,10 +542,7 @@ class RtcPeer(
     // ACCEPT ANSWER
     // ---------------------------------------------------------
 
-    fun acceptAnswer(
-        answerSdp: String
-    ) {
-
+    fun acceptAnswer(answerSdp: String) {
         setRemote(
             requireNotNull(peer),
             SessionDescription.Type.ANSWER,
@@ -677,9 +559,7 @@ class RtcPeer(
         type: SessionDescription.Type,
         sdp: String
     ) {
-
         val latch = CountDownLatch(1)
-
         val failure = AtomicReference<String?>()
 
         connection.setRemoteDescription(
@@ -689,12 +569,8 @@ class RtcPeer(
                     latch.countDown()
                 }
 
-                override fun onSetFailure(
-                    error: String
-                ) {
-
+                override fun onSetFailure(error: String) {
                     failure.set(error)
-
                     latch.countDown()
                 }
 
@@ -703,17 +579,13 @@ class RtcPeer(
                 ) {
                 }
 
-                override fun onCreateFailure(
-                    p0: String
-                ) {
+                override fun onCreateFailure(p0: String) {
                 }
             },
             SessionDescription(type, sdp)
         )
 
-        check(
-            latch.await(20, TimeUnit.SECONDS)
-        ) {
+        check(latch.await(20, TimeUnit.SECONDS)) {
             "Timed out setting remote SDP."
         }
 
@@ -727,10 +599,7 @@ class RtcPeer(
     // ---------------------------------------------------------
 
     private fun awaitIce() {
-
-        check(
-            iceGathered.await(25, TimeUnit.SECONDS)
-        ) {
+        check(iceGathered.await(25, TimeUnit.SECONDS)) {
             "ICE gathering timed out. Check network connectivity."
         }
     }
@@ -739,10 +608,7 @@ class RtcPeer(
     // MICROPHONE CONTROL
     // ---------------------------------------------------------
 
-    fun setMicrophoneEnabled(
-        enabled: Boolean
-    ) {
-
+    fun setMicrophoneEnabled(enabled: Boolean) {
         localAudioTrack?.setEnabled(enabled)
     }
 
@@ -755,30 +621,20 @@ class RtcPeer(
         height: Int,
         fps: Int
     ) {
-
-        if (width <= 0 || height <= 0 || fps <= 0) {
-            return
-        }
+        if (width <= 0 || height <= 0 || fps <= 0) return
 
         captureWidth = width
         captureHeight = height
         captureFps = fps
 
         try {
+            capturer?.changeCaptureFormat(width, height, fps)
 
-            capturer?.changeCaptureFormat(
-                width,
-                height,
-                fps
-            )
-
-            onStatus(
+            reportStatus(
                 "Video quality selected: ${width}x${height} at ${fps} fps."
             )
-
         } catch (e: Exception) {
-
-            onStatus(
+            reportStatus(
                 "Could not change video quality: ${e.message}"
             )
         }
@@ -789,69 +645,77 @@ class RtcPeer(
     // ---------------------------------------------------------
 
     fun close() {
-
         synchronized(lock) {
-
             if (closed) return
-
             closed = true
         }
 
-        try {
-            remoteVideoTrack?.removeSink(
-                remoteRenderer
-            )
-        } catch (_: Exception) {
-        }
-
+        val oldVideoTrack = remoteVideoTrack
         remoteVideoTrack = null
         remoteAudioTrack = null
 
+        // Renderer operations must run on the Android main thread.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            releaseRenderer(oldVideoTrack)
+        } else {
+            val latch = CountDownLatch(1)
+
+            mainHandler.post {
+                try {
+                    releaseRenderer(oldVideoTrack)
+                } finally {
+                    latch.countDown()
+                }
+            }
+
+            try {
+                latch.await(5, TimeUnit.SECONDS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                Log.w(TAG, "Interrupted waiting for renderer cleanup", e)
+            }
+        }
+
         try {
             capturer?.stopCapture()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "Screen capture stop failed", e)
         }
 
         try {
             capturer?.dispose()
         } catch (_: Exception) {
         }
-
         capturer = null
 
         try {
             textureHelper?.dispose()
         } catch (_: Exception) {
         }
-
         textureHelper = null
 
         try {
             localVideoTrack?.dispose()
         } catch (_: Exception) {
         }
-
         localVideoTrack = null
 
         try {
             videoSource?.dispose()
         } catch (_: Exception) {
         }
-
         videoSource = null
 
         try {
             localAudioTrack?.dispose()
         } catch (_: Exception) {
         }
-
         localAudioTrack = null
 
         try {
             audioSource?.dispose()
         } catch (_: Exception) {
         }
-
         audioSource = null
 
         try {
@@ -863,16 +727,7 @@ class RtcPeer(
             peer?.dispose()
         } catch (_: Exception) {
         }
-
         peer = null
-
-        try {
-            if (initialized) {
-                remoteRenderer.release()
-                initialized = false
-            }
-        } catch (_: Exception) {
-        }
 
         try {
             factory.dispose()
@@ -887,6 +742,23 @@ class RtcPeer(
         try {
             egl.release()
         } catch (_: Exception) {
+        }
+    }
+
+    private fun releaseRenderer(track: VideoTrack?) {
+        try {
+            track?.removeSink(remoteRenderer)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not detach remote video track", e)
+        }
+
+        if (initialized) {
+            try {
+                remoteRenderer.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Renderer release failed", e)
+            }
+            initialized = false
         }
     }
 }
