@@ -1,4 +1,3 @@
-
 package com.example.lanshare
 
 import org.json.JSONObject
@@ -11,87 +10,82 @@ import java.net.Socket
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * TCP signaling server.
- *
- * One receiver connects to the sender.
- * The receiver sends an SDP offer.
- * The sender responds with an SDP answer.
- */
 class LanSignalServer(
     private val rtc: RtcPeer,
     private val onStatus: (String) -> Unit,
     private val sessionPassword: String
 ) {
 
-    private val executor =
-        Executors.newSingleThreadExecutor()
-
-    private val running =
-        AtomicBoolean(false)
+    private val executor = Executors.newSingleThreadExecutor()
+    private val running = AtomicBoolean(false)
 
     @Volatile
     private var server: ServerSocket? = null
 
-    fun start(port: Int = 47831) {
+    @Volatile
+    private var activeSocket: Socket? = null
 
+    fun start(
+        port: Int = 47831,
+        onReady: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
         if (!running.compareAndSet(false, true)) {
             onStatus("Signaling server is already running.")
             return
         }
 
         executor.execute {
+            var socketServer: ServerSocket? = null
 
             try {
-
-                val socketServer = ServerSocket()
+                socketServer = ServerSocket()
+                socketServer.reuseAddress = true
+                socketServer.bind(InetSocketAddress(port))
 
                 server = socketServer
 
-                socketServer.reuseAddress = true
+                // The port is now actually listening.
+                onStatus("Waiting for receiver on TCP port $port...")
+                onReady()
 
-                socketServer.bind(
-                    InetSocketAddress(port)
-                )
+                val socket = socketServer.accept()
+                activeSocket = socket
 
-                onStatus(
-                    "Waiting for receiver on TCP port $port..."
-                )
-
-                socketServer.accept().use { socket ->
-
-                    socket.soTimeout = 60000
-
-                    socket.tcpNoDelay = true
-
-                    handleReceiver(socket)
+                socket.use {
+                    it.soTimeout = 60000
+                    it.tcpNoDelay = true
+                    handleReceiver(it)
                 }
 
             } catch (e: Exception) {
-
                 if (running.get()) {
+                    val message =
+                        "${e.javaClass.simpleName}: ${e.message}"
 
-                    onStatus(
-                        "Signaling error: ${e.javaClass.simpleName}: ${e.message}"
-                    )
+                    onStatus("Signaling error: $message")
+                    onError(message)
                 }
 
             } finally {
-
                 running.set(false)
 
                 try {
-                    server?.close()
+                    activeSocket?.close()
                 } catch (_: Exception) {
                 }
+                activeSocket = null
 
+                try {
+                    socketServer?.close()
+                } catch (_: Exception) {
+                }
                 server = null
             }
         }
     }
 
     private fun handleReceiver(socket: Socket) {
-
         val input = BufferedReader(
             InputStreamReader(
                 socket.getInputStream(),
@@ -104,9 +98,7 @@ class LanSignalServer(
             true
         )
 
-        onStatus(
-            "Receiver connected. Checking password..."
-        )
+        onStatus("Receiver connected. Checking password...")
 
         val line = input.readLine()
             ?: error("Receiver disconnected before sending offer.")
@@ -124,7 +116,6 @@ class LanSignalServer(
             sessionPassword.isNotEmpty() &&
             suppliedPassword != sessionPassword
         ) {
-
             output.println(
                 JSONObject()
                     .put("error", "Incorrect connection password")
@@ -144,12 +135,9 @@ class LanSignalServer(
             "SDP offer is too large."
         }
 
-        onStatus(
-            "Receiver authenticated. Negotiating WebRTC..."
-        )
+        onStatus("Receiver authenticated. Negotiating WebRTC...")
 
-        val answer =
-            rtc.acceptOfferAndCreateAnswer(offer)
+        val answer = rtc.acceptOfferAndCreateAnswer(offer)
 
         check(!answer.startsWith("ERROR:")) {
             answer
@@ -164,28 +152,29 @@ class LanSignalServer(
             "Could not send SDP answer to receiver."
         }
 
-        onStatus(
-            "Answer sent. Waiting for WebRTC connection..."
-        )
+        onStatus("Answer sent. Waiting for WebRTC connection...")
     }
 
     fun stop() {
-
         running.set(false)
+
+        try {
+            activeSocket?.close()
+        } catch (_: Exception) {
+        }
 
         try {
             server?.close()
         } catch (_: Exception) {
         }
 
+        activeSocket = null
         server = null
 
         executor.shutdownNow()
     }
 
     companion object {
-
-        private const val MAX_MESSAGE_LENGTH =
-            2 * 1024 * 1024
+        private const val MAX_MESSAGE_LENGTH = 2 * 1024 * 1024
     }
 }
