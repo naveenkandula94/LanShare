@@ -1,26 +1,22 @@
+
 package com.example.lanshare
 
 import android.Manifest
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.EditText
-import android.widget.ImageView
-import android.widget.Spinner
-import android.widget.TextView
+import android.widget.*
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.util.Log
-import android.widget.Toast
 
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.integration.android.IntentIntegrator
@@ -59,15 +55,36 @@ class MainActivity : Activity() {
     private val cameraRequest = 7003
 
     private var startingShare = false
+    private var pendingProjectionData: Intent? = null
+    private var serviceReceiverRegistered = false
 
     companion object {
         private const val SIGNAL_PORT = 47831
         private const val TAG = "LanShare"
     }
 
+    private val serviceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                ProjectionForegroundService.ACTION_READY -> {
+                    status.text = "Foreground service ready. Starting screen capture..."
+                    initializeSharingAfterServiceReady()
+                }
+
+                ProjectionForegroundService.ACTION_FAILED -> {
+                    val error = intent.getStringExtra(
+                        ProjectionForegroundService.EXTRA_ERROR
+                    ) ?: "Unknown foreground service error"
+
+                    Log.e(TAG, "Service startup failed: $error")
+                    stopSession("Could not start screen sharing service: $error")
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         setContentView(R.layout.activity_main)
 
         status = findViewById(R.id.statusText)
@@ -81,12 +98,10 @@ class MainActivity : Activity() {
         setupQualitySpinner()
         setupButtons()
 
-        status.text =
-            "Connect both phones to the same Wi-Fi network."
+        status.text = "Connect both phones to the same Wi-Fi network."
     }
 
     private fun setupQualitySpinner() {
-
         val options = listOf(
             "Low · 640×360 · 15 fps",
             "Standard · 1280×720 · 15 fps",
@@ -101,10 +116,7 @@ class MainActivity : Activity() {
 
         qualitySpinner.onItemSelectedListener =
             object : AdapterView.OnItemSelectedListener {
-
-                override fun onNothingSelected(
-                    parent: AdapterView<*>?
-                ) {}
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
 
                 override fun onItemSelected(
                     parent: AdapterView<*>?,
@@ -112,7 +124,6 @@ class MainActivity : Activity() {
                     position: Int,
                     id: Long
                 ) {
-
                     val dimensions = when (position) {
                         0 -> intArrayOf(640, 360, 15)
                         2 -> intArrayOf(1920, 1080, 30)
@@ -129,87 +140,60 @@ class MainActivity : Activity() {
     }
 
     private fun setupButtons() {
+        findViewById<Button>(R.id.shareButton).setOnClickListener {
+            requestShare()
+        }
 
-        findViewById<Button>(R.id.shareButton)
-            .setOnClickListener {
-                requestShare()
-            }
+        findViewById<Button>(R.id.watchButton).setOnClickListener {
+            requestWatch()
+        }
 
-        findViewById<Button>(R.id.watchButton)
-            .setOnClickListener {
+        findViewById<Button>(R.id.scanQrButton).setOnClickListener {
+            startQrScanner()
+        }
+
+        findViewById<Button>(R.id.stopButton).setOnClickListener {
+            stopSession()
+        }
+
+        findViewById<Button>(R.id.muteButton).setOnClickListener { view ->
+            microphoneEnabled = !microphoneEnabled
+            rtc?.setMicrophoneEnabled(microphoneEnabled)
+
+            (view as Button).text =
+                if (microphoneEnabled) "Mute Microphone"
+                else "Unmute Microphone"
+
+            status.text =
+                if (microphoneEnabled) "Microphone enabled."
+                else "Microphone muted."
+        }
+
+        findViewById<Button>(R.id.reconnectButton).setOnClickListener {
+            if (lastHost.isBlank()) {
+                status.text = "No previous receiver address. Enter an IP first."
+            } else {
+                ipInput.setText(lastHost)
+                passwordInput.setText(lastPassword)
                 requestWatch()
             }
-
-        findViewById<Button>(R.id.scanQrButton)
-            .setOnClickListener {
-                startQrScanner()
-            }
-
-        findViewById<Button>(R.id.stopButton)
-            .setOnClickListener {
-                stopSession()
-            }
-
-        findViewById<Button>(R.id.muteButton)
-            .setOnClickListener { view ->
-
-                microphoneEnabled = !microphoneEnabled
-
-                rtc?.setMicrophoneEnabled(microphoneEnabled)
-
-                (view as Button).text =
-                    if (microphoneEnabled) {
-                        "Mute Microphone"
-                    } else {
-                        "Unmute Microphone"
-                    }
-
-                status.text =
-                    if (microphoneEnabled) {
-                        "Microphone enabled."
-                    } else {
-                        "Microphone muted."
-                    }
-            }
-
-        findViewById<Button>(R.id.reconnectButton)
-            .setOnClickListener {
-
-                if (lastHost.isBlank()) {
-                    status.text =
-                        "No previous receiver address. Enter an IP first."
-                } else {
-                    ipInput.setText(lastHost)
-                    passwordInput.setText(lastPassword)
-                    requestWatch()
-                }
-            }
+        }
     }
 
-    // ---------------------------------------------------------
-    // PERMISSIONS
-    // ---------------------------------------------------------
-
     private fun hasAudioPermission(): Boolean {
-        return checkSelfPermission(
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
+        return checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
     }
 
     private fun requestShare() {
-
         if (startingShare) return
 
         if (!hasAudioPermission()) {
-
-            status.text =
-                "Microphone permission is required for voice sharing."
-
+            status.text = "Microphone permission is required for voice sharing."
             requestPermissions(
                 arrayOf(Manifest.permission.RECORD_AUDIO),
                 audioRequest
             )
-
             return
         }
 
@@ -217,17 +201,12 @@ class MainActivity : Activity() {
     }
 
     private fun requestWatch() {
-
         if (!hasAudioPermission()) {
-
-            status.text =
-                "Microphone permission is required for two-way voice."
-
+            status.text = "Microphone permission is required for two-way voice."
             requestPermissions(
                 arrayOf(Manifest.permission.RECORD_AUDIO),
                 audioRequest
             )
-
             return
         }
 
@@ -235,25 +214,19 @@ class MainActivity : Activity() {
     }
 
     private fun launchScreenPermission() {
-
         try {
-
             val manager = getSystemService(
                 Context.MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
-            status.text =
-                "Waiting for screen-sharing permission..."
+            status.text = "Waiting for screen-sharing permission..."
 
             startActivityForResult(
                 manager.createScreenCaptureIntent(),
                 projectionRequest
             )
-
         } catch (e: Exception) {
-
             Log.e(TAG, "Screen permission request failed", e)
-
             status.text =
                 "Could not request screen permission: ${e.javaClass.simpleName}: ${e.message}"
         }
@@ -264,98 +237,61 @@ class MainActivity : Activity() {
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
-
-        super.onRequestPermissionsResult(
-            requestCode,
-            permissions,
-            grantResults
-        )
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
         if (requestCode == audioRequest) {
-
             if (
                 grantResults.isNotEmpty() &&
                 grantResults[0] == PackageManager.PERMISSION_GRANTED
             ) {
-
-                status.text =
-                    "Microphone permission granted. Tap Share or Watch again."
-
+                status.text = "Microphone permission granted. Tap Share or Watch again."
                 Toast.makeText(
                     this,
                     "Microphone permission granted",
                     Toast.LENGTH_SHORT
                 ).show()
-
             } else {
-
-                status.text =
-                    "Microphone permission denied. Voice sharing cannot start."
+                status.text = "Microphone permission denied."
             }
-
             return
         }
 
         if (requestCode == cameraRequest) {
-
             if (
                 grantResults.isNotEmpty() &&
                 grantResults[0] == PackageManager.PERMISSION_GRANTED
             ) {
                 startQrScanner()
             } else {
-                status.text =
-                    "Camera permission denied. Allow camera access to scan QR codes."
+                status.text = "Camera permission denied. Allow camera access to scan QR codes."
             }
-
-            return
         }
     }
 
-    // ---------------------------------------------------------
-    // QR SCANNER
-    // ---------------------------------------------------------
-
     private fun startQrScanner() {
-
         if (
             checkSelfPermission(Manifest.permission.CAMERA) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-
             requestPermissions(
                 arrayOf(Manifest.permission.CAMERA),
                 cameraRequest
             )
-
             return
         }
 
         try {
-
             IntentIntegrator(this)
-                .setDesiredBarcodeFormats(
-                    IntentIntegrator.QR_CODE
-                )
-                .setPrompt(
-                    "Scan the LAN Share pairing QR code"
-                )
+                .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                .setPrompt("Scan the LAN Share pairing QR code")
                 .setBeepEnabled(false)
                 .setOrientationLocked(false)
                 .initiateScan()
-
         } catch (e: Exception) {
-
             Log.e(TAG, "QR scanner launch failed", e)
-
-            status.text =
-                "Scanner error: ${e.javaClass.simpleName}: ${e.message}"
+            status.text = "Scanner error: ${e.javaClass.simpleName}: ${e.message}"
         }
     }
-
-    // ---------------------------------------------------------
-    // ACTIVITY RESULT
-    // ---------------------------------------------------------
 
     @Deprecated("Uses Activity result API for compatibility.")
     override fun onActivityResult(
@@ -363,65 +299,42 @@ class MainActivity : Activity() {
         resultCode: Int,
         data: Intent?
     ) {
+        super.onActivityResult(requestCode, resultCode, data)
 
-        super.onActivityResult(
+        val scanResult = IntentIntegrator.parseActivityResult(
             requestCode,
             resultCode,
             data
         )
 
-        val scanResult =
-            IntentIntegrator.parseActivityResult(
-                requestCode,
-                resultCode,
-                data
-            )
-
         if (scanResult != null) {
-
             val raw = scanResult.contents
-
             if (!raw.isNullOrBlank()) {
                 handleScannedQr(raw)
             } else {
                 status.text = "QR scanning cancelled."
             }
-
             return
         }
 
         if (requestCode == projectionRequest) {
-
             if (resultCode == RESULT_OK && data != null) {
                 startSharing(data)
             } else {
-                status.text =
-                    "Screen-sharing permission was not granted."
+                status.text = "Screen-sharing permission was not granted."
             }
         }
     }
 
-    // ---------------------------------------------------------
-    // READ PAIRING QR
-    // ---------------------------------------------------------
-
     private fun handleScannedQr(raw: String) {
-
         try {
-
             val uri = Uri.parse(raw)
-
-            val scannedIp =
-                uri.getQueryParameter("ip")
-
-            val port =
-                uri.getQueryParameter("port")
+            val scannedIp = uri.getQueryParameter("ip")
+            val port = uri.getQueryParameter("port")
 
             val validIp =
                 !scannedIp.isNullOrBlank() &&
-                scannedIp.matches(
-                    Regex("""^(?:\d{1,3}\.){3}\d{1,3}$""")
-                ) &&
+                scannedIp.matches(Regex("""^(?:\d{1,3}\.){3}\d{1,3}$""")) &&
                 scannedIp.split(".").all {
                     (it.toIntOrNull() ?: -1) in 0..255
                 }
@@ -432,40 +345,45 @@ class MainActivity : Activity() {
                 validIp &&
                 port == SIGNAL_PORT.toString()
             ) {
-
                 ipInput.setText(scannedIp)
-
                 status.text =
-                    "QR scanned successfully. Enter the session password if required, then tap Watch."
-
+                    "QR scanned. Enter the session password if required, then tap Watch."
             } else {
-
-                status.text =
-                    "Invalid LAN Share QR code or unsupported port."
+                status.text = "Invalid LAN Share QR code or unsupported port."
             }
-
         } catch (e: Exception) {
-
             Log.e(TAG, "Could not read QR code", e)
-
-            status.text =
-                "Could not read QR code: ${e.message}"
+            status.text = "Could not read QR code: ${e.message}"
         }
     }
 
-    // ---------------------------------------------------------
-    // START SCREEN SHARING
-    // ---------------------------------------------------------
-
+    // Starts the service and waits for its READY broadcast.
     private fun startSharing(permissionData: Intent) {
-
         if (startingShare) return
 
         startingShare = true
+        pendingProjectionData = permissionData
 
         try {
+            status.text = "Starting screen-sharing foreground service..."
 
-            status.text = "Starting screen sharing..."
+            val filter = IntentFilter().apply {
+                addAction(ProjectionForegroundService.ACTION_READY)
+                addAction(ProjectionForegroundService.ACTION_FAILED)
+            }
+
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(
+                    serviceReceiver,
+                    filter,
+                    Context.RECEIVER_NOT_EXPORTED
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(serviceReceiver, filter)
+            }
+
+            serviceReceiverRegistered = true
 
             val serviceIntent = Intent(
                 this,
@@ -478,11 +396,27 @@ class MainActivity : Activity() {
                 startService(serviceIntent)
             }
 
-            val newRtc = RtcPeer(
-                this,
-                renderer
-            ) { message ->
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not launch foreground service", e)
+            stopSession(
+                "Could not start screen sharing: ${e.javaClass.simpleName}: ${e.message}"
+            )
+        }
+    }
 
+    // Called only after the service confirms startForeground() succeeded.
+    private fun initializeSharingAfterServiceReady() {
+        val permissionData = pendingProjectionData
+
+        if (permissionData == null) {
+            stopSession("Screen-capture permission data is missing. Please try again.")
+            return
+        }
+
+        try {
+            status.text = "Foreground service ready. Initializing WebRTC..."
+
+            val newRtc = RtcPeer(this, renderer) { message ->
                 runOnUiThread {
                     status.text = message
                 }
@@ -490,6 +424,7 @@ class MainActivity : Activity() {
 
             rtc = newRtc
 
+            // MediaProjection is first used after foreground service startup.
             newRtc.startScreenCapture(permissionData)
 
             check(newRtc.createPeer()) {
@@ -499,98 +434,83 @@ class MainActivity : Activity() {
             val newServer = LanSignalServer(
                 newRtc,
                 { message ->
-
                     runOnUiThread {
                         status.text = message
                     }
-
                 },
                 passwordInput.text.toString()
             )
 
             signalServer = newServer
-
             newServer.start(SIGNAL_PORT)
 
             val address = LanIp.address(this)
 
             check(
-                address.matches(
-                    Regex("""^(?:\d{1,3}\.){3}\d{1,3}$""")
-                )
+                address.matches(Regex("""^(?:\d{1,3}\.){3}\d{1,3}$""")) &&
+                address.split(".").all {
+                    (it.toIntOrNull() ?: -1) in 0..255
+                }
             ) {
                 "Could not find your Wi-Fi IPv4 address. Connect to Wi-Fi first."
             }
 
             ipText.text = "Sender IP: $address"
-
             showPairingQr(address)
 
             status.text =
                 "Screen sharing is ready. Scan the QR code or enter this IP on the other phone: $address"
 
         } catch (e: Exception) {
-
-            Log.e(TAG, "Could not start sharing", e)
-
-            val errorMessage =
+            Log.e(TAG, "Could not initialize sharing", e)
+            stopSession(
                 "Could not start sharing: ${e.javaClass.simpleName}: ${e.message}"
-
-            stopSession(errorMessage)
-
+            )
         } finally {
-
+            pendingProjectionData = null
             startingShare = false
+            unregisterServiceReceiver()
         }
     }
 
-    // ---------------------------------------------------------
-    // RECEIVER CONNECTION
-    // ---------------------------------------------------------
+    private fun unregisterServiceReceiver() {
+        if (serviceReceiverRegistered) {
+            try {
+                unregisterReceiver(serviceReceiver)
+            } catch (e: Exception) {
+                Log.w(TAG, "Receiver unregister issue", e)
+            }
+            serviceReceiverRegistered = false
+        }
+    }
 
     private fun connectAsReceiver() {
-
         val host = ipInput.text.toString().trim()
 
         if (host.isBlank()) {
-
-            status.text =
-                "Enter the sender phone's Wi-Fi IP address."
-
+            status.text = "Enter the sender phone's Wi-Fi IP address."
             return
         }
 
         if (
-            !host.matches(
-                Regex("""^(?:\d{1,3}\.){3}\d{1,3}$""")
-            ) ||
+            !host.matches(Regex("""^(?:\d{1,3}\.){3}\d{1,3}$""")) ||
             host.split(".").any {
                 (it.toIntOrNull() ?: -1) !in 0..255
             }
         ) {
-
-            status.text =
-                "Enter a valid IPv4 address, for example 192.168.1.25."
-
+            status.text = "Enter a valid IPv4 address, for example 192.168.1.25."
             return
         }
 
         lastHost = host
         lastPassword = passwordInput.text.toString()
-
         status.text = "Connecting to $host..."
 
         io.execute {
-
             var client: RtcPeer? = null
 
             try {
-
-                val newClient = RtcPeer(
-                    this,
-                    renderer
-                ) { message ->
-
+                val newClient = RtcPeer(this, renderer) { message ->
                     runOnUiThread {
                         status.text = message
                     }
@@ -599,9 +519,7 @@ class MainActivity : Activity() {
                 client = newClient
                 rtc = newClient
 
-                check(
-                    newClient.createPeer(asReceiver = true)
-                ) {
+                check(newClient.createPeer(asReceiver = true)) {
                     "Could not create WebRTC peer connection."
                 }
 
@@ -612,19 +530,12 @@ class MainActivity : Activity() {
                 }
 
                 Socket(host, SIGNAL_PORT).use { socket ->
-
                     socket.soTimeout = 60000
                     socket.tcpNoDelay = true
 
-                    val output = PrintWriter(
-                        socket.getOutputStream(),
-                        true
-                    )
-
+                    val output = PrintWriter(socket.getOutputStream(), true)
                     val input = BufferedReader(
-                        InputStreamReader(
-                            socket.getInputStream()
-                        )
+                        InputStreamReader(socket.getInputStream())
                     )
 
                     val request = JSONObject()
@@ -633,29 +544,23 @@ class MainActivity : Activity() {
 
                     output.println(request.toString())
 
-                    val answerLine =
-                        input.readLine()
-                            ?: error("Sender closed the signaling connection.")
+                    val answerLine = input.readLine()
+                        ?: error("Sender closed the signaling connection.")
 
-                    val answerJson =
-                        JSONObject(answerLine)
+                    val answerJson = JSONObject(answerLine)
 
                     if (answerJson.has("error")) {
                         error(answerJson.getString("error"))
                     }
 
-                    newClient.acceptAnswer(
-                        answerJson.getString("sdp")
-                    )
+                    newClient.acceptAnswer(answerJson.getString("sdp"))
                 }
 
                 runOnUiThread {
-                    status.text =
-                        "Connected. Waiting for screen and voice..."
+                    status.text = "Connected. Waiting for screen and voice..."
                 }
 
             } catch (e: Exception) {
-
                 Log.e(TAG, "Receiver connection failed", e)
 
                 try {
@@ -675,14 +580,8 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---------------------------------------------------------
-    // GENERATE SENDER QR
-    // ---------------------------------------------------------
-
     private fun showPairingQr(address: String) {
-
         try {
-
             val content =
                 "lanshare://connect?ip=$address&port=$SIGNAL_PORT"
 
@@ -701,15 +600,10 @@ class MainActivity : Activity() {
 
             for (x in 0 until 420) {
                 for (y in 0 until 420) {
-
                     bitmap.setPixel(
                         x,
                         y,
-                        if (matrix[x, y]) {
-                            Color.BLACK
-                        } else {
-                            Color.WHITE
-                        }
+                        if (matrix[x, y]) Color.BLACK else Color.WHITE
                     )
                 }
             }
@@ -718,60 +612,44 @@ class MainActivity : Activity() {
             qrImage.visibility = View.VISIBLE
 
         } catch (e: Exception) {
-
             Log.e(TAG, "QR generation failed", e)
-
-            status.text =
-                "QR generation failed: ${e.message}"
+            status.text = "QR generation failed: ${e.message}"
         }
     }
 
-    // ---------------------------------------------------------
-    // STOP SESSION
-    // ---------------------------------------------------------
-
-    private fun stopSession(
-        message: String = "Disconnected."
-    ) {
+    private fun stopSession(message: String = "Disconnected.") {
+        unregisterServiceReceiver()
+        pendingProjectionData = null
+        startingShare = false
 
         try {
             signalServer?.stop()
         } catch (_: Exception) {
         }
-
         signalServer = null
 
         try {
             rtc?.close()
         } catch (_: Exception) {
         }
-
         rtc = null
 
         try {
             stopService(
-                Intent(
-                    this,
-                    ProjectionForegroundService::class.java
-                )
+                Intent(this, ProjectionForegroundService::class.java)
             )
         } catch (_: Exception) {
         }
 
         qrImage.setImageDrawable(null)
         qrImage.visibility = View.GONE
-
         ipText.text = "Sender IP will appear here"
-
         status.text = message
     }
 
     override fun onDestroy() {
-
         stopSession()
-
         io.shutdownNow()
-
         super.onDestroy()
     }
 }
