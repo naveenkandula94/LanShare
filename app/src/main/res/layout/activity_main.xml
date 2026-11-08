@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:fillViewport="true">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="20dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="LAN Share" android:textSize="28sp" android:textStyle="bold"
+            android:paddingBottom="6dp"/>
+        <TextView android:id="@+id/statusText" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Connect both phones to the same Wi-Fi."
+            android:textSize="15sp" android:paddingBottom="14dp"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Connection password (optional)" android:textStyle="bold"/>
+        <EditText android:id="@+id/passwordInput" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="Set the same password on both phones"
+            android:inputType="textPassword" android:singleLine="true"/>
+        <Button android:id="@+id/shareButton" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Share My Screen + Voice"/>
+        <TextView android:id="@+id/ipText" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Sender IP will appear here"
+            android:paddingTop="12dp" android:textStyle="bold"/>
+        <ImageView android:id="@+id/qrImage" android:layout_width="180dp"
+            android:layout_height="180dp" android:layout_gravity="center"
+            android:contentDescription="Connection QR code" android:visibility="gone"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Or connect to another phone" android:textStyle="bold"
+            android:paddingTop="16dp"/>
+        <EditText android:id="@+id/ipInput" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="Sender IP, e.g. 192.168.1.25"
+            android:inputType="text" android:singleLine="true"/>
+        <Button android:id="@+id/scanQrButton" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Scan Sender QR Code"/>
+        <Button android:id="@+id/watchButton" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Watch Other Phone + Voice"/>
+        <Button android:id="@+id/reconnectButton" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Reconnect"/>
+        <Button android:id="@+id/muteButton" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Mute Microphone"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Video quality" android:textStyle="bold" android:paddingTop="10dp"/>
+        <Spinner android:id="@+id/qualitySpinner" android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
+        <org.webrtc.SurfaceViewRenderer android:id="@+id/remoteRenderer"
+            android:layout_width="match_parent" android:layout_height="240dp"
+            android:layout_marginTop="14dp"/>
+        <Button android:id="@+id/stopButton" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Stop / Disconnect"
+            android:layout_marginTop="12dp"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="File transfer and session recording are not yet enabled in this build. Use only trusted Wi-Fi; password authentication protects pairing but does not encrypt the media/signaling transport."
+            android:textSize="12sp" android:paddingTop="12dp"/>
+    </LinearLayout>
+</ScrollView>
